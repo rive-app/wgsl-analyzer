@@ -140,33 +140,28 @@ pub enum SyntaxKind {
     Ident,
 
     // literals
-    // These regexes are taken from the spec, with `-?` added to allow negative floats too
-    // This is a hack to avoid implementing all the rules around floats and const evaluation
-    #[regex(r"-?0[fh]")]
-    #[regex(r"-?[1-9][0-9]*[fh]")]
+    // Taken from the spec. A leading minus stays a separate token so `x-1.0` lexes as a subtraction
+    #[regex(r"0[fh]")]
+    #[regex(r"[1-9][0-9]*[fh]")]
     // We need priorities so that we avoid the fact that e.g. 1.2 would match both otherwise
-    #[regex(r"-?[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?[fh]?", priority = 1)]
-    #[regex(r"-?[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?[fh]?")]
-    #[regex(r"-?[0-9]+[eE][+-]?[0-9]+[fh]?")]
+    #[regex(r"[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?[fh]?", priority = 1)]
+    #[regex(r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?[fh]?")]
+    #[regex(r"[0-9]+[eE][+-]?[0-9]+[fh]?")]
     DecimalFloatLiteral,
     // Because above we need priorities here
     #[regex(
-        r"-?0[xX][0-9a-fA-F]*\.[0-9a-fA-F]+([pP][+-]?[0-9]+[fh]?)?",
+        r"0[xX][0-9a-fA-F]*\.[0-9a-fA-F]+([pP][+-]?[0-9]+[fh]?)?",
         priority = 1
     )]
-    #[regex(r"-?0[xX][0-9a-fA-F]+\.[0-9a-fA-F]*([pP][+-]?[0-9]+[fh]?)?")]
-    #[regex(r"-?0[xX][0-9a-fA-F]+[pP][+-]?[0-9]+[fh]?")]
+    #[regex(r"0[xX][0-9a-fA-F]+\.[0-9a-fA-F]*([pP][+-]?[0-9]+[fh]?)?")]
+    #[regex(r"0[xX][0-9a-fA-F]+[pP][+-]?[0-9]+[fh]?")]
     HexFloatLiteral,
-    // This represents potentially signed ints
-    // This is a hack to avoid implementing const evaluation
-    // TODO: We really should implement const evaluation
-    #[regex(r"-?0i?")]
-    #[regex(r"-?[1-9][0-9]*i?")]
-    #[regex(r"-?0[xX][0-9a-fA-F]+i?")]
+    #[regex(r"0i?")]
+    #[regex(r"[1-9][0-9]*i?")]
+    #[regex(r"0[xX][0-9a-fA-F]+i?")]
     IntLiteral,
-    // This is definitely unsigned ints
-    #[regex(r"-?0u")]
-    #[regex(r"-?[1-9][0-9]*u")]
+    #[regex(r"0u")]
+    #[regex(r"[1-9][0-9]*u")]
     #[regex(r"0[xX][0-9a-fA-F]+u")]
     UintLiteral,
 
@@ -505,18 +500,20 @@ mod tests {
     #[test]
     fn lex_decimal_float() {
         check_lex("10.0", expect![[r#"[DecimalFloatLiteral]"#]]);
-        check_lex("-10.0", expect![[r#"[DecimalFloatLiteral]"#]]);
+        check_lex("-10.0", expect![[r#"[Minus, DecimalFloatLiteral]"#]]);
         check_lex("1e9f", expect![[r#"[DecimalFloatLiteral]"#]]);
-        check_lex("-0.0e7", expect![[r#"[DecimalFloatLiteral]"#]]);
+        check_lex("-0.0e7", expect![[r#"[Minus, DecimalFloatLiteral]"#]]);
         check_lex(".1", expect![[r#"[DecimalFloatLiteral]"#]]);
         check_lex("1.", expect![[r#"[DecimalFloatLiteral]"#]]);
+        check_lex("x-16.0", expect![[r#"[Ident, Minus, DecimalFloatLiteral]"#]]);
+        check_lex("i-1", expect![[r#"[Ident, Minus, IntLiteral]"#]]);
     }
 
     #[test]
     fn lex_hex_float() {
         check_lex("0x0.0", expect![[r#"[HexFloatLiteral]"#]]);
         check_lex("0X1p9", expect![[r#"[HexFloatLiteral]"#]]);
-        check_lex("-0x0.0", expect![[r#"[HexFloatLiteral]"#]]);
+        check_lex("-0x0.0", expect![[r#"[Minus, HexFloatLiteral]"#]]);
         check_lex("0xff.13p13", expect![[r#"[HexFloatLiteral]"#]]);
     }
 

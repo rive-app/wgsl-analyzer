@@ -460,16 +460,20 @@ mod tests {
         check(
             "1+2*3-4",
             expect![[r#"
-                InfixExpr@0..5
-                  Literal@0..1
-                    IntLiteral@0..1 "1"
-                  Plus@1..2 "+"
-                  InfixExpr@2..5
-                    Literal@2..3
-                      IntLiteral@2..3 "2"
-                    Star@3..4 "*"
-                    Literal@4..5
-                      IntLiteral@4..5 "3""#]],
+                InfixExpr@0..7
+                  InfixExpr@0..5
+                    Literal@0..1
+                      IntLiteral@0..1 "1"
+                    Plus@1..2 "+"
+                    InfixExpr@2..5
+                      Literal@2..3
+                        IntLiteral@2..3 "2"
+                      Star@3..4 "*"
+                      Literal@4..5
+                        IntLiteral@4..5 "3"
+                  Minus@5..6 "-"
+                  Literal@6..7
+                    IntLiteral@6..7 "4""#]],
         );
     }
 
@@ -518,8 +522,10 @@ mod tests {
         check(
             "-10",
             expect![[r#"
-                Literal@0..3
-                  IntLiteral@0..3 "-10""#]],
+                PrefixExpr@0..3
+                  Minus@0..1 "-"
+                  Literal@1..3
+                    IntLiteral@1..3 "10""#]],
         );
     }
 
@@ -529,8 +535,10 @@ mod tests {
             "-20+20",
             expect![[r#"
                 InfixExpr@0..6
-                  Literal@0..3
-                    IntLiteral@0..3 "-20"
+                  PrefixExpr@0..3
+                    Minus@0..1 "-"
+                    Literal@1..3
+                      IntLiteral@1..3 "20"
                   Plus@3..4 "+"
                   Literal@4..6
                     IntLiteral@4..6 "20""#]],
