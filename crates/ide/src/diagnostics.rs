@@ -458,8 +458,23 @@ pub fn diagnostics(
                     actual,
                 } => {
                     let source = expr.value.to_node(&root);
-                    let expected = ty::pretty::pretty_type_expectation(db, expected);
-                    let actual = ty::pretty::pretty_type(db, actual);
+                    let mut expected_text =
+                        ty::pretty::pretty_type_expectation(db, expected.clone());
+                    let mut actual_text = ty::pretty::pretty_type(db, actual);
+                    // Compact types leave out address spaces and access modes.
+                    if expected_text == actual_text {
+                        expected_text = ty::pretty::pretty_type_expectation_with_verbosity(
+                            db,
+                            expected,
+                            ty::pretty::TypeVerbosity::Full,
+                        );
+                        actual_text = ty::pretty::pretty_type_with_verbosity(
+                            db,
+                            actual,
+                            ty::pretty::TypeVerbosity::Full,
+                        );
+                    }
+                    let (expected, actual) = (expected_text, actual_text);
                     let frange = original_file_range(db.upcast(), expr.file_id, source.syntax());
                     Diagnostic::new(
                         DiagnosticCode("2"),

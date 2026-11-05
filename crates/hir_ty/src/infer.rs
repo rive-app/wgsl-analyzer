@@ -674,13 +674,7 @@ impl<'db> InferenceContext<'db> {
                             Some(field) => {
                                 self.set_field_resolution(expr, FieldId { r#struct, field });
 
-                                let field_ty = field_types[field];
-                                // TODO: correct storage class/access mode
-                                self.make_ref(
-                                    field_ty,
-                                    StorageClass::Private,
-                                    AccessMode::read_write(),
-                                )
+                                self.ref_like(expr_ty, field_types[field])
                             },
                             None => {
                                 self.push_diagnostic(InferenceDiagnostic::NoSuchField {
@@ -693,6 +687,8 @@ impl<'db> InferenceContext<'db> {
                         }
                     },
                     TyKind::Vector(ref vec_type) => match self.vec_swizzle(vec_type, name) {
+                        // Only a single component of a reference is itself one.
+                        Ok(ty) if name.as_str().len() == 1 => self.ref_like(expr_ty, ty),
                         Ok(ty) => ty,
                         Err(_) => {
                             self.push_diagnostic(InferenceDiagnostic::NoSuchField {
@@ -743,8 +739,6 @@ impl<'db> InferenceContext<'db> {
                 // TODO check index expr
 
                 let lhs_kind = lhs.kind(self.db);
-                let is_ref = matches!(lhs_kind, TyKind::Ref(_));
-
                 let lhs_inner = lhs_kind.unref(self.db);
 
                 let ty = match &*lhs_inner {
@@ -772,10 +766,7 @@ impl<'db> InferenceContext<'db> {
                     },
                 };
 
-                match is_ref {
-                    true => self.make_ref(ty, StorageClass::Private, AccessMode::read_write()), // TODO use correct
-                    false => ty,
-                }
+                self.ref_like(lhs, ty)
             },
             Expr::Literal(ref lit) => {
                 let ty_kind = match lit {
@@ -961,12 +952,11 @@ impl<'db> InferenceContext<'db> {
                 let data = self.db.global_var_data(id);
                 let result = self.db.infer(DefWithBodyId::GlobalVariable(id));
                 let ty = result.return_type.unwrap_or_else(|| self.err_ty());
-                // TODO use correct defaults
-                self.make_ref(
-                    ty,
-                    data.storage_class.unwrap_or(StorageClass::Private),
-                    AccessMode::read_write(),
-                )
+                let storage_class = data.storage_class.unwrap_or(StorageClass::Private);
+                let access_mode = data
+                    .access_mode
+                    .unwrap_or_else(|| storage_class.default_access_mode());
+                self.make_ref(ty, storage_class, access_mode)
             },
             hir_def::resolver::ResolveValue::GlobalConstant(loc) => {
                 let id = self.db.intern_global_constant(loc);
@@ -1018,9 +1008,7 @@ impl<'db> InferenceContext<'db> {
                 .chars()
                 .all(|char| allowed_chars.contains(&char))
             {
-                let ty = self.ty_from_vec_size(vec_type.inner, name.as_str().len() as u8);
-                let r = self.make_ref(ty, StorageClass::Function, AccessMode::read_write()); // TODO is correct?
-                return Ok(r);
+                return Ok(self.ty_from_vec_size(vec_type.inner, name.as_str().len() as u8));
             }
         }
 
@@ -1657,6 +1645,21 @@ impl InferenceContext<'_> {
             storage_class,
             access_mode,
         }))
+    }
+
+    /// A reference to `ty` in the address space and access mode of `base` when
+    /// `base` is a reference, as its elements and members are, or else `ty`.
+    fn ref_like(
+        &self,
+        base: Ty,
+        ty: Ty,
+    ) -> Ty {
+        match base.kind(self.db) {
+            TyKind::Ref(reference) => {
+                self.make_ref(ty, reference.storage_class, reference.access_mode)
+            },
+            _ => ty,
+        }
     }
 
     fn ref_to_ptr(
