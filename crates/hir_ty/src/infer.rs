@@ -447,22 +447,15 @@ impl<'db> InferenceContext<'db> {
             },
             Statement::CompoundAssignment { lhs, rhs, op } => {
                 let lhs_ty = self.infer_expr(lhs);
-
-                let lhs_kind = lhs_ty.kind(self.db);
-                let lhs_inner = match lhs_kind {
-                    TyKind::Ref(r) => r.inner,
-                    _ => {
-                        self.push_diagnostic(InferenceDiagnostic::AssignmentNotAReference {
-                            lhs,
-                            actual: lhs_ty,
-                        });
-                        self.err_ty()
-                    },
-                };
-
                 let ty = self.infer_binary_op(lhs, rhs, op.into());
 
-                self.expect_same_type(lhs, ty, lhs_inner);
+                match lhs_ty.kind(self.db) {
+                    TyKind::Ref(r) => self.expect_same_type(lhs, ty, r.inner),
+                    _ => self.push_diagnostic(InferenceDiagnostic::AssignmentNotAReference {
+                        lhs,
+                        actual: lhs_ty,
+                    }),
+                }
             },
             Statement::IncrDecr { expr, .. } => {
                 let lhs_ty = self.infer_expr(expr);

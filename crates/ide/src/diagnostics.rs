@@ -474,11 +474,10 @@ pub fn diagnostics(
                             ty::pretty::TypeVerbosity::Full,
                         );
                     }
-                    let (expected, actual) = (expected_text, actual_text);
                     let frange = original_file_range(db.upcast(), expr.file_id, source.syntax());
                     Diagnostic::new(
                         DiagnosticCode("2"),
-                        format!("expected {}, found {}", expected, actual),
+                        format!("expected {}, found {}", expected_text, actual_text),
                         frange.range,
                     )
                 },
