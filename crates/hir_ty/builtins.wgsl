@@ -50,10 +50,12 @@ fma(f32, f32) -> f32
 fma(vecN<f32>, vecN<f32>) -> f32
 fract(f32) -> f32
 fract(vecN<f32>) -> vecN<f32>
-// TODO frexp
+frexp(f32) -> __frexp_result<f32>
+frexp(vecN<f32>) -> __frexp_result<vecN<f32>>
 inverseSqrt(f32) -> f32
 inverseSqrt(vecN<f32>) -> vecN<f32>
-// TODO ldexp
+ldexp(f32, i32) -> f32
+ldexp(vecN<f32>, vecN<i32>) -> vecN<f32>
 length(f32) -> f32
 length(vecN<f32>) -> f32
 log(f32) -> f32
@@ -67,7 +69,8 @@ max(vecN<f32>, vecN<f32>) -> vecN<f32>
 mix(f32, f32, f32) -> f32
 mix(vecN<f32>, vecN<f32>, vecN<f32>) -> vecN<f32>
 mix(vecN<f32>, vecN<f32>, f32) -> vecN<f32>
-// TODO modf
+modf(f32) -> __modf_result<f32>
+modf(vecN<f32>) -> __modf_result<vecN<f32>>
 normalize(vecN<f32>) -> vecN<f32>
 pow(f32, f32) -> f32
 pow(vecN<f32>, vecN<f32>) -> vecN<f32>
@@ -401,7 +404,7 @@ atomicAnd(ptr<atomic<T>>, T) -> T
 atomicOr(ptr<atomic<T>>, T) -> T
 atomicXor(ptr<atomic<T>>, T) -> T
 atomicExchange(ptr<atomic<T>>, T) -> T
-// TODO atomicCompareExchangeWeak
+atomicCompareExchangeWeak(ptr<atomic<T>>, T, T) -> __atomic_compare_exchange_result<T>
 
 // data packing
 pack4x8snorm(vec4<f32>) -> u32

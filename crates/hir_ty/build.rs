@@ -34,6 +34,7 @@ enum Type {
     Atomic(Box<Type>),
     Bound(usize),
     StorageTypeOfTexelFormat(usize),
+    BuiltinStruct(&'static str, Box<Type>),
 }
 
 enum VecSize {
@@ -330,6 +331,14 @@ fn parse_ty(
         } else if ty == "atomic" {
             let inner = parse_ty(generics, inner);
             return Type::Atomic(Box::new(inner));
+        } else if let Some(kind) = match ty {
+            "__modf_result" => Some("Modf"),
+            "__frexp_result" => Some("Frexp"),
+            "__atomic_compare_exchange_result" => Some("AtomicCompareExchange"),
+            _ => None,
+        } {
+            let inner = parse_ty(generics, inner);
+            return Type::BuiltinStruct(kind, Box::new(inner));
         } else {
             unimplemented!("{}", ty);
         }
@@ -452,6 +461,11 @@ fn type_to_rust(ty: &Type) -> String {
         Type::StorageTypeOfTexelFormat(var) => format!(
             "TyKind::StorageTypeOfTexelFormat(BoundVar {{ index: {} }}).intern(db)",
             var
+        ),
+        Type::BuiltinStruct(kind, inner) => format!(
+            "TyKind::BuiltinStruct(BuiltinStruct {{ kind: BuiltinStructKind::{}, inner: {} }}).intern(db)",
+            kind,
+            type_to_rust(inner)
         ),
     }
 }

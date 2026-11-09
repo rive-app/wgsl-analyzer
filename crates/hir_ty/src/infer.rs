@@ -18,9 +18,9 @@ use crate::{
     builtins::{Builtin, BuiltinId, BuiltinOverload, BuiltinOverloadId},
     function::{FunctionDetails, ResolvedFunctionId},
     ty::{
-        ArraySize, ArrayType, AtomicType, BoundVar, MatrixType, Ptr, Ref, SamplerType, ScalarType,
-        TexelFormat, TextureDimensionality, TextureKind, TextureType, Ty, TyKind, VecSize,
-        VectorType,
+        ArraySize, ArrayType, AtomicType, BoundVar, BuiltinStruct, MatrixType, Ptr, Ref,
+        SamplerType, ScalarType, TexelFormat, TextureDimensionality, TextureKind, TextureType, Ty,
+        TyKind, VecSize, VectorType,
     },
 };
 
@@ -428,6 +428,9 @@ impl<'db> InferenceContext<'db> {
                     self.infer_expr_expect(expr, TypeExpectation::from_option(self.return_ty));
                 }
             },
+            Statement::Assignment { lhs, rhs } if self.is_phony(lhs) => {
+                self.infer_expr(rhs);
+            },
             Statement::Assignment { lhs, rhs } => {
                 let lhs_ty = self.infer_expr(lhs);
 
@@ -653,62 +656,41 @@ impl<'db> InferenceContext<'db> {
                 expr: field_expr,
                 ref name,
             } => {
-                let expr_ty = self.infer_expr(field_expr);
+                let base_ty = self.infer_expr(field_expr);
+                let expr_ty = self.through_pointer(base_ty);
                 if expr_ty.is_err(self.db) {
                     return self.err_ty();
                 }
 
-                match *expr_ty.kind(self.db).unref(self.db).as_ref() {
+                let field_ty = match *expr_ty.kind(self.db).unref(self.db).as_ref() {
                     TyKind::Struct(r#struct) => {
                         let struct_data = self.db.struct_data(r#struct);
-                        let field_types = self.db.field_types(r#struct);
-
-                        match struct_data.field(name) {
-                            Some(field) => {
-                                self.set_field_resolution(expr, FieldId { r#struct, field });
-
-                                self.ref_like(expr_ty, field_types[field])
-                            },
-                            None => {
-                                self.push_diagnostic(InferenceDiagnostic::NoSuchField {
-                                    expr: field_expr,
-                                    name: name.clone(),
-                                    ty: expr_ty,
-                                });
-                                self.err_ty()
-                            },
-                        }
+                        struct_data.field(name).map(|field| {
+                            self.set_field_resolution(expr, FieldId { r#struct, field });
+                            self.ref_like(expr_ty, self.db.field_types(r#struct)[field])
+                        })
                     },
                     TyKind::Vector(ref vec_type) => match self.vec_swizzle(vec_type, name) {
                         // Only a single component of a reference is itself one.
-                        Ok(ty) if name.as_str().len() == 1 => self.ref_like(expr_ty, ty),
-                        Ok(ty) => ty,
-                        Err(_) => {
-                            self.push_diagnostic(InferenceDiagnostic::NoSuchField {
-                                expr: field_expr,
-                                name: name.clone(),
-                                ty: expr_ty,
-                            });
-                            self.err_ty()
-                        },
+                        Ok(ty) if name.as_str().len() == 1 => Some(self.ref_like(expr_ty, ty)),
+                        Ok(ty) => Some(ty),
+                        Err(_) => None,
                     },
-                    TyKind::Matrix(_) => {
-                        self.push_diagnostic(InferenceDiagnostic::NoSuchField {
-                            expr: field_expr,
-                            name: name.clone(),
-                            ty: expr_ty,
-                        });
-                        self.err_ty()
-                    },
-                    _ => {
-                        self.push_diagnostic(InferenceDiagnostic::NoSuchField {
-                            expr: field_expr,
-                            name: name.clone(),
-                            ty: expr_ty,
-                        });
-                        self.err_ty()
-                    },
-                }
+                    TyKind::BuiltinStruct(r#struct) => r#struct
+                        .fields(self.db)
+                        .into_iter()
+                        .find(|(field, _)| *field == name.as_str())
+                        .map(|(_, ty)| self.ref_like(expr_ty, ty)),
+                    _ => None,
+                };
+                field_ty.unwrap_or_else(|| {
+                    self.push_diagnostic(InferenceDiagnostic::NoSuchField {
+                        expr: field_expr,
+                        name: name.clone(),
+                        ty: base_ty,
+                    });
+                    self.err_ty()
+                })
             },
             Expr::Call {
                 ref callee,
@@ -727,7 +709,8 @@ impl<'db> InferenceContext<'db> {
                     .unwrap_or_else(|_| self.err_ty())
             },
             Expr::Index { lhs, index } => {
-                let lhs = self.infer_expr(lhs);
+                let base_ty = self.infer_expr(lhs);
+                let lhs = self.through_pointer(base_ty);
                 let _index_expr = self.infer_expr(index);
                 // TODO check index expr
 
@@ -753,7 +736,7 @@ impl<'db> InferenceContext<'db> {
                     _ => {
                         self.push_diagnostic(InferenceDiagnostic::ArrayAccessInvalidType {
                             expr,
-                            ty: lhs,
+                            ty: base_ty,
                         });
                         self.err_ty()
                     },
@@ -1264,7 +1247,8 @@ impl<'db> InferenceContext<'db> {
             | TyKind::Sampler(_)
             | TyKind::Ptr(_)
             | TyKind::Atomic(_)
-            | TyKind::StorageTypeOfTexelFormat(_) => {
+            | TyKind::StorageTypeOfTexelFormat(_)
+            | TyKind::BuiltinStruct(_) => {
                 self.push_diagnostic(InferenceDiagnostic::InvalidConstructionType { expr, ty })
             },
             TyKind::BoundVar(_) | TyKind::Ref(_) => unreachable!(),
@@ -1397,6 +1381,11 @@ impl UnificationTable {
                 let format = self.texel_format_vars[&var];
                 storage_type_of_texel_format(db, format)
             },
+            TyKind::BuiltinStruct(r#struct) => TyKind::BuiltinStruct(BuiltinStruct {
+                inner: self.resolve(db, r#struct.inner),
+                ..r#struct
+            })
+            .intern(db),
             _ => ty,
         }
     }
@@ -1651,6 +1640,25 @@ impl InferenceContext<'_> {
             TyKind::Ref(reference) => {
                 self.make_ref(ty, reference.storage_class, reference.access_mode)
             },
+            _ => ty,
+        }
+    }
+
+    fn is_phony(
+        &self,
+        expr: ExprId,
+    ) -> bool {
+        matches!(&self.body.exprs[expr], Expr::Path(name) if name.as_str() == "_")
+    }
+
+    /// What `ty` points to when it is a pointer, as WGSL reads `p.a` and `p[i]`
+    /// as `(*p).a` and `(*p)[i]`.
+    fn through_pointer(
+        &self,
+        ty: Ty,
+    ) -> Ty {
+        match ty.unref(self.db).kind(self.db) {
+            TyKind::Ptr(ptr) => self.ptr_to_ref(ptr),
             _ => ty,
         }
     }

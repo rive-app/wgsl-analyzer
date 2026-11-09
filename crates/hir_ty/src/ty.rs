@@ -94,6 +94,49 @@ pub enum TyKind {
     Ptr(Ptr),
     BoundVar(BoundVar),
     StorageTypeOfTexelFormat(BoundVar), // e.g. rgba8unorm -> vec4<f32>
+    BuiltinStruct(BuiltinStruct),
+}
+
+/// The result of `modf`, `frexp` or `atomicCompareExchangeWeak`, a struct WGSL
+/// never lets a shader name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BuiltinStruct {
+    pub kind: BuiltinStructKind,
+    pub inner: Ty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinStructKind {
+    Modf,
+    Frexp,
+    AtomicCompareExchange,
+}
+
+impl BuiltinStruct {
+    pub fn fields(
+        self,
+        db: &dyn HirDatabase,
+    ) -> [(&'static str, Ty); 2] {
+        match self.kind {
+            BuiltinStructKind::Modf => [("fract", self.inner), ("whole", self.inner)],
+            BuiltinStructKind::Frexp => {
+                let i32 = TyKind::Scalar(ScalarType::I32).intern(db);
+                let exp = match self.inner.kind(db) {
+                    TyKind::Vector(vector) => TyKind::Vector(VectorType {
+                        size: vector.size,
+                        inner: i32,
+                    })
+                    .intern(db),
+                    _ => i32,
+                };
+                [("fract", self.inner), ("exp", exp)]
+            },
+            BuiltinStructKind::AtomicCompareExchange => [
+                ("old_value", self.inner),
+                ("exchanged", TyKind::Scalar(ScalarType::Bool).intern(db)),
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -175,6 +218,7 @@ impl TyKind {
                     ..
                 })
                 | TyKind::Struct(_)
+                | TyKind::BuiltinStruct(_)
         )
     }
 

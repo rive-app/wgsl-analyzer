@@ -21,6 +21,10 @@ pub(crate) fn complete_dot(
     let field_completion_item =
         |name| CompletionItem::new(CompletionItemKind::Field, ctx.source_range(), name).build();
 
+    let ty = match ty.unref(ctx.db).kind(ctx.db) {
+        TyKind::Ptr(ptr) => ptr.inner,
+        _ => ty,
+    };
     match ty.kind(ctx.db).unref(ctx.db).as_ref() {
         TyKind::Vector(vec) => {
             let size = vec.size.as_u8() as usize;
@@ -28,6 +32,13 @@ pub(crate) fn complete_dot(
             acc.add_all(swizzle);
         },
         TyKind::Matrix(_) => return None,
+        TyKind::BuiltinStruct(r#struct) => {
+            let items = r#struct
+                .fields(ctx.db)
+                .into_iter()
+                .map(|(field, _)| field_completion_item(field));
+            acc.add_all(items);
+        },
         TyKind::Struct(r#struct) => {
             let r#struct = ctx.db.struct_data(*r#struct);
             let items = r#struct

@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use super::{Ty, TyKind};
+use super::{BuiltinStructKind, Ty, TyKind};
 use crate::{
     HirDatabase,
     function::FunctionDetails,
@@ -228,6 +228,20 @@ fn write_ty(
         },
         TyKind::StorageTypeOfTexelFormat(var) => {
             write!(f, "{}::StorageType", ('F'..).nth(var.index).unwrap())
+        },
+        TyKind::BuiltinStruct(r#struct) => {
+            f.write_str(match r#struct.kind {
+                BuiltinStructKind::Modf => "__modf_result_",
+                BuiltinStructKind::Frexp => "__frexp_result_",
+                BuiltinStructKind::AtomicCompareExchange => "__atomic_compare_exchange_result_",
+            })?;
+            match r#struct.inner.kind(db) {
+                TyKind::Vector(vector) => {
+                    write!(f, "vec{}_", vector.size)?;
+                    write_ty(db, vector.inner, f, verbosity)
+                },
+                _ => write_ty(db, r#struct.inner, f, verbosity),
+            }
         },
     }
 }
