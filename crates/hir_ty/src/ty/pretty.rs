@@ -136,6 +136,8 @@ fn write_ty(
                 ScalarType::I32 => "i32",
                 ScalarType::U32 => "u32",
                 ScalarType::F32 => "f32",
+                ScalarType::AbstractInt => "AbstractInt",
+                ScalarType::AbstractFloat => "AbstractFloat",
             };
             write!(f, "{}", s)
         },
@@ -163,6 +165,7 @@ fn write_ty(
             write_ty(db, t.inner, f, verbosity)?;
             match t.size {
                 ArraySize::Const(val) => write!(f, ", {}", val)?,
+                ArraySize::Named(ref name) => write!(f, ", {}", name.as_str())?,
                 ArraySize::Dynamic => {},
             }
             write!(f, ">")

@@ -22,11 +22,13 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinFloat {
     F32,
+    Abstract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinInt {
     I32,
+    Abstract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -155,43 +157,62 @@ pub enum Statement {
     },
 }
 
+fn hex_digits(text: &str) -> Option<&str> {
+    text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+}
+
+fn float_kind(suffixed: bool) -> BuiltinFloat {
+    if suffixed {
+        BuiltinFloat::F32
+    } else {
+        BuiltinFloat::Abstract
+    }
+}
+
 pub fn parse_literal(lit: ast::LiteralKind) -> Literal {
     match lit {
         ast::LiteralKind::IntLiteral(lit) => {
+            let kind = if lit.text().ends_with('i') {
+                BuiltinInt::I32
+            } else {
+                BuiltinInt::Abstract
+            };
             let text = lit.text().trim_end_matches('i');
             let (text, negative) = match text.strip_prefix('-') {
                 Some(new) => (new, true),
                 None => (text, false),
             };
-            let mut value = match text.strip_prefix("0x") {
+            // Out of range literals are left for naga to report.
+            let mut value = match hex_digits(text) {
                 Some(hex) => i64::from_str_radix(hex, 16),
                 None => text.parse(),
             }
-            .expect("invalid literal");
+            .unwrap_or(0);
 
             if negative {
                 value = -value;
             }
 
-            Literal::Int(value, BuiltinInt::I32)
+            Literal::Int(value, kind)
         },
         ast::LiteralKind::UintLiteral(lit) => {
             let text = lit.text().trim_end_matches('u');
-            let value = match text.strip_prefix("0x") {
+            let value = match hex_digits(text) {
                 Some(hex) => u64::from_str_radix(hex, 16),
                 None => text.parse(),
             }
-            .expect("invalid literal");
+            .unwrap_or(0);
 
             Literal::Uint(value, BuiltinUint::U32)
         },
-        ast::LiteralKind::HexFloatLiteral(_) => Literal::Float(0, BuiltinFloat::F32),
+        // A hex float's `f` is a digit unless it follows the exponent.
+        ast::LiteralKind::HexFloatLiteral(lit) => {
+            let text = lit.text();
+            let suffixed = text.contains(['p', 'P']) && text.ends_with(['f', 'h']);
+            Literal::Float(0, float_kind(suffixed))
+        },
         ast::LiteralKind::DecimalFloatLiteral(lit) => {
-            use std::str::FromStr;
-            // Float suffixes are not accepted by `f32::from_str`. Ignore them
-            let text = lit.text().trim_end_matches(char::is_alphabetic);
-            let _value = f32::from_str(text).expect("invalid literal");
-            Literal::Float(0, BuiltinFloat::F32)
+            Literal::Float(0, float_kind(lit.text().ends_with(['f', 'h'])))
         },
         ast::LiteralKind::True(_) => Literal::Bool(true),
         ast::LiteralKind::False(_) => Literal::Bool(false),

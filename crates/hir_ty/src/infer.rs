@@ -5,7 +5,10 @@ use hir_def::{
     body::{BindingId, Body},
     data::{FieldId, FunctionData, GlobalConstantData, GlobalVariableData, OverrideData},
     db::{DefWithBodyId, FunctionId, GlobalConstantId, GlobalVariableId, OverrideId, TypeAliasId},
-    expr::{ArithOp, BinaryOp, Callee, CmpOp, Expr, ExprId, Statement, StatementId, UnaryOp},
+    expr::{
+        ArithOp, BinaryOp, BuiltinFloat, BuiltinInt, Callee, CmpOp, Expr, ExprId, Statement,
+        StatementId, UnaryOp,
+    },
     module_data::Name,
     resolver::{ResolveType, Resolver},
     type_ref::{self, AccessMode, StorageClass, TypeRef, VecDimensionality},
@@ -44,7 +47,8 @@ pub fn infer_query(
         },
     }
 
-    ctx.infer_body();
+    // Only a constant keeps an abstract initializer's type.
+    ctx.infer_body(!matches!(def, DefWithBodyId::GlobalConstant(_)));
 
     Arc::new(ctx.resolve_all())
 }
@@ -108,6 +112,42 @@ pub enum InferenceDiagnostic {
         container: TypeContainer,
         error: TypeLoweringError,
     },
+}
+
+impl InferenceDiagnostic {
+    fn mentions_error(
+        &self,
+        db: &dyn HirDatabase,
+    ) -> bool {
+        match self {
+            InferenceDiagnostic::AssignmentNotAReference { actual, .. }
+            | InferenceDiagnostic::NoSuchField { ty: actual, .. }
+            | InferenceDiagnostic::ArrayAccessInvalidType { ty: actual, .. }
+            | InferenceDiagnostic::InvalidConstructionType { ty: actual, .. }
+            | InferenceDiagnostic::AddrOfNotRef { actual, .. }
+            | InferenceDiagnostic::DerefNotAPtr { actual, .. } => actual.is_err_behind_refs(db),
+            InferenceDiagnostic::TypeMismatch {
+                expected, actual, ..
+            } => {
+                actual.is_err_behind_refs(db)
+                    || matches!(
+                        expected,
+                        TypeExpectation::Type(TypeExpectationInner::Exact(ty))
+                        | TypeExpectation::TypeOrVecOf(TypeExpectationInner::Exact(ty))
+                            if ty.is_err_behind_refs(db)
+                    )
+            },
+            InferenceDiagnostic::NoBuiltinOverload { parameters, .. } => {
+                parameters.iter().any(|ty| ty.is_err_behind_refs(db))
+            },
+            InferenceDiagnostic::NoConstructor { ty, parameters, .. } => {
+                ty.is_err_behind_refs(db) || parameters.iter().any(|ty| ty.is_err_behind_refs(db))
+            },
+            InferenceDiagnostic::UnresolvedName { .. }
+            | InferenceDiagnostic::FunctionCallArgCountMismatch { .. }
+            | InferenceDiagnostic::InvalidType { .. } => false,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -213,7 +253,10 @@ impl<'db> InferenceContext<'db> {
         &mut self,
         diagnostic: InferenceDiagnostic,
     ) {
-        self.result.diagnostics.push(diagnostic);
+        // Skip repeats: one about an error type was reported where the error arose.
+        if !diagnostic.mentions_error(self.db) && !self.result.diagnostics.contains(&diagnostic) {
+            self.result.diagnostics.push(diagnostic);
+        }
     }
 
     fn resolve_all(mut self) -> InferenceResult {
@@ -304,16 +347,25 @@ impl<'db> InferenceContext<'db> {
         });
     }
 
-    fn infer_body(&mut self) {
+    fn infer_body(
+        &mut self,
+        concretize: bool,
+    ) {
         match self.body.root {
             Some(Either::Left(stmt)) => {
                 self.infer_stmt(stmt);
             },
             Some(Either::Right(expr)) => {
-                let ty = self.infer_expr_expect(expr, TypeExpectation::from_option(self.return_ty));
-                if self.return_ty.is_none() {
-                    self.return_ty = Some(ty);
-                }
+                let init_ty =
+                    self.infer_expr_expect(expr, TypeExpectation::from_option(self.return_ty));
+                let ty = self.return_ty.unwrap_or_else(|| {
+                    if concretize {
+                        init_ty.concretize(self.db)
+                    } else {
+                        init_ty
+                    }
+                });
+                self.return_ty = Some(ty);
 
                 if let Some(main_binding) = self.body.main_binding {
                     self.set_binding_ty(main_binding, ty);
@@ -368,7 +420,7 @@ impl<'db> InferenceContext<'db> {
                 });
                 let ty = if let Some(init) = initializer {
                     let expr_ty = self.infer_expr_expect(init, TypeExpectation::from_option(ty));
-                    ty.unwrap_or(expr_ty)
+                    ty.unwrap_or_else(|| expr_ty.concretize(self.db))
                 } else {
                     ty.unwrap_or_else(|| self.err_ty())
                 };
@@ -415,7 +467,7 @@ impl<'db> InferenceContext<'db> {
                 });
                 let ty = if let Some(init) = initializer {
                     let expr_ty = self.infer_expr_expect(init, TypeExpectation::from_option(ty));
-                    ty.unwrap_or(expr_ty)
+                    ty.unwrap_or_else(|| expr_ty.concretize(self.db))
                 } else {
                     ty.unwrap_or_else(|| self.err_ty())
                 };
@@ -510,11 +562,20 @@ impl<'db> InferenceContext<'db> {
                 ref case_blocks,
                 ref default_block,
             } => {
-                let ty = self.infer_expr(expr).unref(self.db);
+                // The selector and case values take the type they all convert to.
+                let mut ty = self.infer_expr(expr).unref(self.db);
 
                 for (selectors, case) in case_blocks {
-                    for selector in selectors {
-                        self.infer_expr_expect(*selector, TypeExpectation::from_ty(ty));
+                    for &selector in selectors {
+                        let selector_ty = self.infer_expr(selector).unref(self.db);
+                        match common_type(self.db, ty, selector_ty) {
+                            Some(common) => ty = common,
+                            None => self.push_diagnostic(InferenceDiagnostic::TypeMismatch {
+                                expr: selector,
+                                expected: TypeExpectation::from_ty(ty),
+                                actual: selector_ty,
+                            }),
+                        }
                     }
                     self.infer_stmt(*case);
                 }
@@ -568,13 +629,10 @@ impl<'db> InferenceContext<'db> {
         match *expectation {
             TypeExpectationInner::Exact(expected_type) => match expected_type.kind(self.db) {
                 TyKind::Error => Ok(()),
-                _ => {
-                    if ty == expected_type {
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                },
+                _ => ty
+                    .conversion_rank(self.db, expected_type)
+                    .map(drop)
+                    .ok_or(()),
             },
             TypeExpectationInner::I32OrF32 => match ty.kind(self.db).unref(self.db).as_ref() {
                 TyKind::Scalar(ScalarType::I32 | ScalarType::F32) => Ok(()),
@@ -598,7 +656,7 @@ impl<'db> InferenceContext<'db> {
         actual: Ty,
     ) {
         let actual_unref = actual.unref(self.db);
-        if expected != actual_unref {
+        if actual_unref.conversion_rank(self.db, expected).is_none() {
             self.push_diagnostic(InferenceDiagnostic::TypeMismatch {
                 expr,
                 actual: actual_unref,
@@ -705,8 +763,8 @@ impl<'db> InferenceContext<'db> {
             Expr::Bitcast { ty, expr } => {
                 self.infer_expr(expr);
 
-                self.try_lower_ty(&self.db.lookup_intern_type_ref(ty))
-                    .unwrap_or_else(|_| self.err_ty())
+                TyLoweringContext::new(self.db, &self.resolver)
+                    .lower_ty(&self.db.lookup_intern_type_ref(ty))
             },
             Expr::Index { lhs, index } => {
                 let base_ty = self.infer_expr(lhs);
@@ -746,9 +804,19 @@ impl<'db> InferenceContext<'db> {
             },
             Expr::Literal(ref lit) => {
                 let ty_kind = match lit {
-                    hir_def::expr::Literal::Int(_, _) => TyKind::Scalar(ScalarType::I32),
+                    hir_def::expr::Literal::Int(_, BuiltinInt::I32) => {
+                        TyKind::Scalar(ScalarType::I32)
+                    },
+                    hir_def::expr::Literal::Int(_, BuiltinInt::Abstract) => {
+                        TyKind::Scalar(ScalarType::AbstractInt)
+                    },
                     hir_def::expr::Literal::Uint(_, _) => TyKind::Scalar(ScalarType::U32),
-                    hir_def::expr::Literal::Float(_, _) => TyKind::Scalar(ScalarType::F32),
+                    hir_def::expr::Literal::Float(_, BuiltinFloat::F32) => {
+                        TyKind::Scalar(ScalarType::F32)
+                    },
+                    hir_def::expr::Literal::Float(_, BuiltinFloat::Abstract) => {
+                        TyKind::Scalar(ScalarType::AbstractFloat)
+                    },
                     hir_def::expr::Literal::Bool(_) => TyKind::Scalar(ScalarType::Bool),
                 };
                 self.db.intern_ty(ty_kind)
@@ -869,7 +937,13 @@ impl<'db> InferenceContext<'db> {
             },
         };
 
-        self.call_builtin(lhs, builtin, &[lhs_ty, rhs_ty], Some(op.symbol()))
+        let ty = self.call_builtin(lhs, builtin, &[lhs_ty, rhs_ty], Some(op.symbol()));
+        // WGSL shifts an abstract value by a u32 amount without making it concrete.
+        let shift = matches!(op, BinaryOp::ArithOp(ArithOp::Shl | ArithOp::Shr));
+        if shift && lhs_ty.is_abstract(self.db) && !ty.is_err(self.db) {
+            return lhs_ty;
+        }
+        ty
     }
 
     fn builtin_vector_inferred_constructor(
@@ -1045,25 +1119,29 @@ impl<'db> InferenceContext<'db> {
         return_ty: Option<Ty>,
     ) -> Result<(Ty, BuiltinOverloadId), ()> {
         let builtin = builtin_id.lookup(self.db);
+        let abstract_overloads = !CONCRETE_ONLY_BUILTINS.contains(&builtin.name());
+        let mut best = None;
         for (overload_id, overload) in builtin.overloads() {
-            if let Ok(ty) = self.call_builtin_overload(overload, args) {
-                if let Some(ret) = return_ty {
-                    if ret == ty {
-                        return Ok((ty, overload_id));
-                    }
-                } else {
-                    return Ok((ty, overload_id));
-                }
+            let Ok((ty, rank)) = self.call_builtin_overload(overload, args, abstract_overloads)
+            else {
+                continue;
+            };
+            let returns_expected =
+                return_ty.is_none_or(|ret| ty.conversion_rank(self.db, ret).is_some());
+            if returns_expected && best.is_none_or(|(_, _, best_rank)| rank < best_rank) {
+                best = Some((ty, overload_id, rank));
             }
         }
-        Err(())
+        best.map(|(ty, overload_id, _)| (ty, overload_id)).ok_or(())
     }
 
+    /// The return type of a call to `sig`, and the conversion rank of its arguments.
     fn call_builtin_overload(
         &self,
         sig: &BuiltinOverload,
         args: &[Ty],
-    ) -> Result<Ty, ()> {
+        abstract_overloads: bool,
+    ) -> Result<(Ty, u32), ()> {
         let fn_ty = sig.ty.lookup(self.db);
 
         if fn_ty.parameters.len() != args.len() {
@@ -1075,11 +1153,29 @@ impl<'db> InferenceContext<'db> {
             unify(self.db, &mut unification_table, expected, found)?;
         }
 
-        let return_type = fn_ty
-            .return_type
-            .map(|ty| unification_table.resolve(self.db, ty));
+        let return_type = fn_ty.return_type.map_or_else(
+            || self.err_ty(),
+            |ty| unification_table.resolve(self.db, ty),
+        );
 
-        Ok(return_type.unwrap_or_else(|| self.err_ty()))
+        let mut rank = 0;
+        let mut all_abstract = true;
+        let mut returns_converted = false;
+        for (expected, &found) in fn_ty.parameters().zip(args.iter()) {
+            if !found.is_abstract(self.db) {
+                all_abstract = false;
+                continue;
+            }
+            let expected = unification_table.resolve(self.db, expected);
+            rank += found.conversion_rank(self.db, expected).ok_or(())?;
+            returns_converted |= expected.scalar(self.db) == return_type.scalar(self.db);
+        }
+
+        // The builtin table lists only concrete overloads, where WGSL keeps an all abstract call abstract.
+        if abstract_overloads && all_abstract && returns_converted {
+            return Ok((return_type.abstractify(self.db), rank));
+        }
+        Ok((return_type, rank))
     }
 
     fn infer_call(
@@ -1092,18 +1188,40 @@ impl<'db> InferenceContext<'db> {
             Callee::InferredComponentMatrix { rows, columns } => {
                 let builtin_id = self.builtin_matrix_inferred_constructor(columns, rows);
 
+                // Matrices hold only floats, so integer literals build float ones.
                 self.call_builtin(expr, builtin_id, &args, Some("matrix construction"))
+                    .map_scalar(self.db, |scalar| match scalar {
+                        ScalarType::AbstractInt => ScalarType::AbstractFloat,
+                        scalar => scalar,
+                    })
             },
             Callee::InferredComponentVec(size) => {
                 let builtin_id = self.builtin_vector_inferred_constructor(size);
 
                 self.call_builtin(expr, builtin_id, &args, Some("vec construction"))
             },
+            // Any number of elements of one type, which the builtin table cannot list.
             Callee::InferredComponentArray => {
-                let builtin_id = Builtin::builtin_op_array_constructor(self.db).intern(self.db);
-                // TODO: Special case calling array initialisers to allow n-ary calls
-
-                self.call_builtin(expr, builtin_id, &args, Some("array construction"))
+                let inner = args.split_first().and_then(|(&first, rest)| {
+                    rest.iter()
+                        .try_fold(first, |common, &arg| common_type(self.db, common, arg))
+                });
+                if let Some(inner) = inner {
+                    TyKind::Array(ArrayType {
+                        inner,
+                        binding_array: false,
+                        size: ArraySize::Const(args.len() as u64),
+                    })
+                    .intern(self.db)
+                } else {
+                    self.push_diagnostic(InferenceDiagnostic::NoBuiltinOverload {
+                        expr,
+                        builtin: Builtin::builtin_op_array_constructor(self.db).intern(self.db),
+                        name: Some("array construction"),
+                        parameters: args,
+                    });
+                    self.err_ty()
+                }
             },
             Callee::Name(name) => match self.resolver.resolve_callable(name) {
                 Some(arg) => match arg {
@@ -1116,10 +1234,9 @@ impl<'db> InferenceContext<'db> {
                     },
                     hir_def::resolver::ResolveCallable::TypeAlias(alias) => {
                         let alias = self.db.intern_type_alias(alias);
-                        let data = self.db.type_alias_data(alias);
-                        let type_ref = self.db.lookup_intern_type_ref(data.ty);
-
-                        let ty = self.lower_ty(TypeContainer::TypeAlias(alias), &type_ref);
+                        let lowered =
+                            TyLoweringContext::new(self.db, &self.resolver).try_lower_alias(alias);
+                        let ty = self.report_lowering(TypeContainer::TypeAlias(alias), lowered);
                         self.check_ty_initialiser(expr, ty, args);
                         ty
                     },
@@ -1282,12 +1399,16 @@ impl UnificationTable {
 
     fn set_type(
         &mut self,
+        db: &dyn HirDatabase,
         var: BoundVar,
         ty: Ty,
     ) -> Result<(), ()> {
         match self.type_vars.entry(var) {
-            Entry::Occupied(entry) if *entry.get() == ty => Ok(()),
-            Entry::Occupied(_) => Err(()),
+            Entry::Occupied(mut entry) => {
+                let common = common_type(db, *entry.get(), ty).ok_or(())?;
+                entry.insert(common);
+                Ok(())
+            },
             Entry::Vacant(entry) => {
                 entry.insert(ty);
                 Ok(())
@@ -1381,6 +1502,11 @@ impl UnificationTable {
                 let format = self.texel_format_vars[&var];
                 storage_type_of_texel_format(db, format)
             },
+            TyKind::Array(array) => TyKind::Array(ArrayType {
+                inner: self.resolve(db, array.inner),
+                ..array
+            })
+            .intern(db),
             TyKind::BuiltinStruct(r#struct) => TyKind::BuiltinStruct(BuiltinStruct {
                 inner: self.resolve(db, r#struct.inner),
                 ..r#struct
@@ -1388,6 +1514,21 @@ impl UnificationTable {
             .intern(db),
             _ => ty,
         }
+    }
+}
+
+/// The type both `a` and `b` convert to, so the concrete one when only one is abstract.
+fn common_type(
+    db: &dyn HirDatabase,
+    a: Ty,
+    b: Ty,
+) -> Option<Ty> {
+    if b.conversion_rank(db, a).is_some() {
+        Some(a)
+    } else if a.conversion_rank(db, b).is_some() {
+        Some(b)
+    } else {
+        None
     }
 }
 
@@ -1402,10 +1543,7 @@ fn unify(
     let found_kind = found.kind(db);
 
     match expected_kind {
-        TyKind::BoundVar(var) => {
-            table.set_type(var, found)?;
-            Ok(())
-        },
+        TyKind::BoundVar(var) => table.set_type(db, var, found),
         TyKind::Vector(VectorType { size, inner }) => match found_kind {
             TyKind::Vector(found_vec) => {
                 unify(db, table, inner, found_vec.inner)?;
@@ -1517,12 +1655,7 @@ fn unify(
         TyKind::StorageTypeOfTexelFormat(format) => {
             let format = *table.texel_format_vars.get(&format).unwrap();
             let storage_type = storage_type_of_texel_format(db, format);
-
-            if storage_type != found {
-                return Err(());
-            }
-
-            Ok(())
+            found.conversion_rank(db, storage_type).map(drop).ok_or(())
         },
 
         TyKind::Texture(TextureType {
@@ -1551,8 +1684,7 @@ fn unify(
             _ => Err(()),
         },
 
-        _ if expected == found => Ok(()),
-        _ => Err(()),
+        _ => found.conversion_rank(db, expected).map(drop).ok_or(()),
     }
 }
 
@@ -1693,37 +1825,62 @@ impl InferenceContext<'_> {
         self.db.intern_ty(TyKind::Scalar(ScalarType::Bool))
     }
 
-    fn try_lower_ty(
-        &mut self,
-        type_ref: &TypeRef,
-    ) -> Result<Ty, TypeLoweringError> {
-        TyLoweringContext::new(self.db, &self.resolver).try_lower_ty(type_ref)
-    }
-
     fn lower_ty(
         &mut self,
         container: impl Into<TypeContainer>,
         type_ref: &TypeRef,
     ) -> Ty {
-        match self.try_lower_ty(type_ref) {
-            Ok(ty) => ty,
-            Err(error) => {
-                self.push_diagnostic(InferenceDiagnostic::InvalidType {
-                    container: container.into(),
-                    error,
-                });
-                self.err_ty()
-            },
-        }
+        let lowered = TyLoweringContext::new(self.db, &self.resolver).try_lower_ty(type_ref);
+        self.report_lowering(container, lowered)
+    }
+
+    /// The lowered type, or an error type once the failure is reported.
+    fn report_lowering(
+        &mut self,
+        container: impl Into<TypeContainer>,
+        lowered: Result<Ty, TypeLoweringError>,
+    ) -> Ty {
+        lowered.unwrap_or_else(|error| {
+            self.push_diagnostic(InferenceDiagnostic::InvalidType {
+                container: container.into(),
+                error,
+            });
+            self.err_ty()
+        })
     }
 }
 
 pub struct TyLoweringContext<'db> {
     db: &'db dyn HirDatabase,
     resolver: &'db Resolver,
+    /// The aliases being lowered, and the one found to refer to itself.
+    aliases: Vec<TypeAliasId>,
+    cyclic_alias: Option<TypeAliasId>,
 
     pub diagnostics: Vec<TypeLoweringError>,
 }
+
+/// Builtins WGSL defines only for concrete types, so a call to one is never abstract.
+const CONCRETE_ONLY_BUILTINS: &[&str] = &[
+    "countLeadingZeros",
+    "countOneBits",
+    "countTrailingZeros",
+    "extractBits",
+    "firstLeadingBit",
+    "firstTrailingBit",
+    "insertBits",
+    "reverseBits",
+    "quantizeToF16",
+    "dpdx",
+    "dpdxCoarse",
+    "dpdxFine",
+    "dpdy",
+    "dpdyCoarse",
+    "dpdyFine",
+    "fwidth",
+    "fwidthCoarse",
+    "fwidthFine",
+];
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum TypeLoweringError {
@@ -1760,6 +1917,8 @@ impl<'db> TyLoweringContext<'db> {
         Self {
             db,
             resolver,
+            aliases: Vec::new(),
+            cyclic_alias: None,
             diagnostics: Vec::new(),
         }
     }
@@ -1829,7 +1988,7 @@ impl<'db> TyLoweringContext<'db> {
                 size: match array.size {
                     type_ref::ArraySize::Int(i) => ArraySize::Const(i as u64), // TODO error
                     type_ref::ArraySize::Uint(u) => ArraySize::Const(u),
-                    type_ref::ArraySize::Path(_) => ArraySize::Const(0), // TODO: Path array sizes
+                    type_ref::ArraySize::Path(ref name) => ArraySize::Named(name.clone()),
                     type_ref::ArraySize::Dynamic => ArraySize::Dynamic,
                 },
             }),
@@ -1843,12 +2002,12 @@ impl<'db> TyLoweringContext<'db> {
                     let r#struct = self.db.intern_struct(loc);
                     TyKind::Struct(r#struct)
                 },
+                // The alias's own failure is not this use's to report.
                 Some(ResolveType::TypeAlias(loc)) => {
                     let alias = self.db.intern_type_alias(loc);
-                    let data = self.db.type_alias_data(alias);
-                    let type_ref = &self.db.lookup_intern_type_ref(data.ty);
-
-                    return Ok(self.lower_ty(type_ref));
+                    return Ok(self
+                        .try_lower_alias(alias)
+                        .unwrap_or_else(|_| TyKind::Error.intern(self.db)));
                 },
                 Some(ResolveType::PredeclaredTypeAlias(type_ref)) => {
                     return Ok(self.lower_ty(&type_ref));
@@ -1857,5 +2016,26 @@ impl<'db> TyLoweringContext<'db> {
             },
         };
         Ok(self.db.intern_ty(ty_kind))
+    }
+
+    /// Lowers what `alias` names, as an error type when it refers to itself.
+    pub fn try_lower_alias(
+        &mut self,
+        alias: TypeAliasId,
+    ) -> Result<Ty, TypeLoweringError> {
+        // A cyclic alias would otherwise recurse until the stack overflows.
+        if self.aliases.contains(&alias) {
+            self.cyclic_alias = Some(alias);
+            return Ok(TyKind::Error.intern(self.db));
+        }
+        let data = self.db.type_alias_data(alias);
+        self.aliases.push(alias);
+        let ty = self.try_lower_ty(&self.db.lookup_intern_type_ref(data.ty));
+        self.aliases.pop();
+        if self.cyclic_alias == Some(alias) {
+            self.cyclic_alias = None;
+            return Ok(TyKind::Error.intern(self.db));
+        }
+        ty
     }
 }

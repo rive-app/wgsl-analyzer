@@ -73,7 +73,9 @@ impl TyKind {
     ) -> Option<Bytes> {
         Some(match self {
             TyKind::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => 4,
-            TyKind::Scalar(ScalarType::Bool) => return None,
+            TyKind::Scalar(
+                ScalarType::Bool | ScalarType::AbstractInt | ScalarType::AbstractFloat,
+            ) => return None,
             TyKind::Atomic(_) => 4,
             TyKind::Vector(v) => match v.size {
                 VecSize::Two => 8,
@@ -115,7 +117,9 @@ impl TyKind {
     ) -> Option<Bytes> {
         Some(match self {
             TyKind::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => 4,
-            TyKind::Scalar(ScalarType::Bool) => return None,
+            TyKind::Scalar(
+                ScalarType::Bool | ScalarType::AbstractInt | ScalarType::AbstractFloat,
+            ) => return None,
             TyKind::Atomic(_) => 4,
             TyKind::Vector(v) => match v.size {
                 VecSize::Two => 8,
@@ -145,7 +149,7 @@ impl TyKind {
                     let stride = array.stride(address_space, db)?;
                     n as Bytes * stride
                 },
-                ArraySize::Dynamic => return None,
+                ArraySize::Named(_) | ArraySize::Dynamic => return None,
             },
             _ => return None,
         })

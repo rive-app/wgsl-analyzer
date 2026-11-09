@@ -3,7 +3,7 @@ pub mod pretty;
 use std::{borrow::Cow, fmt::Write, str::FromStr};
 
 pub use hir_def::type_ref::{AccessMode, StorageClass};
-use hir_def::{db::StructId, type_ref};
+use hir_def::{db::StructId, module_data::Name, type_ref};
 use salsa::InternKey;
 
 use crate::HirDatabase;
@@ -76,6 +76,127 @@ impl Ty {
         r#struct: StructId,
     ) -> bool {
         self.kind(db).contains_struct(db, r#struct)
+    }
+
+    /// The scalar of a scalar, or of a vector, matrix or array's elements.
+    pub fn scalar(
+        self,
+        db: &dyn HirDatabase,
+    ) -> Option<ScalarType> {
+        match self.kind(db) {
+            TyKind::Scalar(scalar) => Some(scalar),
+            TyKind::Vector(VectorType { inner, .. })
+            | TyKind::Matrix(MatrixType { inner, .. })
+            | TyKind::Array(ArrayType { inner, .. }) => inner.scalar(db),
+            _ => None,
+        }
+    }
+
+    /// This type with its scalar, if it has one, replaced by `map`.
+    #[must_use]
+    pub fn map_scalar(
+        self,
+        db: &dyn HirDatabase,
+        map: fn(ScalarType) -> ScalarType,
+    ) -> Ty {
+        match self.kind(db) {
+            TyKind::Scalar(scalar) => TyKind::Scalar(map(scalar)),
+            TyKind::Vector(vector) => TyKind::Vector(VectorType {
+                inner: vector.inner.map_scalar(db, map),
+                ..vector
+            }),
+            TyKind::Matrix(matrix) => TyKind::Matrix(MatrixType {
+                inner: matrix.inner.map_scalar(db, map),
+                ..matrix
+            }),
+            TyKind::Array(array) => TyKind::Array(ArrayType {
+                inner: array.inner.map_scalar(db, map),
+                ..array
+            }),
+            _ => return self,
+        }
+        .intern(db)
+    }
+
+    /// The type an abstract value takes where nothing asks for another, as in `let x = 1`.
+    #[must_use]
+    pub fn concretize(
+        self,
+        db: &dyn HirDatabase,
+    ) -> Ty {
+        self.map_scalar(db, |scalar| match scalar {
+            ScalarType::AbstractInt => ScalarType::I32,
+            ScalarType::AbstractFloat => ScalarType::F32,
+            scalar => scalar,
+        })
+    }
+
+    /// This type with its numeric scalar made abstract.
+    #[must_use]
+    pub fn abstractify(
+        self,
+        db: &dyn HirDatabase,
+    ) -> Ty {
+        self.map_scalar(db, |scalar| match scalar {
+            ScalarType::I32 | ScalarType::U32 => ScalarType::AbstractInt,
+            ScalarType::F32 => ScalarType::AbstractFloat,
+            scalar => scalar,
+        })
+    }
+
+    pub fn is_abstract(
+        self,
+        db: &dyn HirDatabase,
+    ) -> bool {
+        self.concretize(db) != self
+    }
+
+    /// Whether this is an error type, or a reference or pointer to one.
+    pub fn is_err_behind_refs(
+        self,
+        db: &dyn HirDatabase,
+    ) -> bool {
+        match self.kind(db) {
+            TyKind::Error => true,
+            TyKind::Ref(Ref { inner, .. }) | TyKind::Ptr(Ptr { inner, .. }) => {
+                inner.is_err_behind_refs(db)
+            },
+            _ => false,
+        }
+    }
+
+    /// WGSL's rank for converting a value of this type to `to`, lower preferred,
+    /// or `None` when it cannot.
+    pub fn conversion_rank(
+        self,
+        db: &dyn HirDatabase,
+        to: Ty,
+    ) -> Option<u32> {
+        if self == to {
+            return Some(0);
+        }
+        match (self.kind(db), to.kind(db)) {
+            (TyKind::Scalar(from), TyKind::Scalar(to)) => from.conversion_rank(&to),
+            (TyKind::Vector(from), TyKind::Vector(to)) if from.size == to.size => {
+                from.inner.conversion_rank(db, to.inner)
+            },
+            (TyKind::Matrix(from), TyKind::Matrix(to))
+                if from.columns == to.columns && from.rows == to.rows =>
+            {
+                from.inner.conversion_rank(db, to.inner)
+            },
+            (TyKind::Array(from), TyKind::Array(to))
+                if from.size.matches(&to.size) && from.binding_array == to.binding_array =>
+            {
+                from.inner.conversion_rank(db, to.inner)
+            },
+            (TyKind::Ptr(from), TyKind::Ptr(to))
+                if from.storage_class == to.storage_class && from.access_mode == to.access_mode =>
+            {
+                from.inner.conversion_rank(db, to.inner)
+            },
+            _ => None,
+        }
     }
 }
 
@@ -214,7 +335,7 @@ impl TyKind {
                 | TyKind::Vector(_)
                 | TyKind::Matrix(_)
                 | TyKind::Array(ArrayType {
-                    size: ArraySize::Const(_),
+                    size: ArraySize::Const(_) | ArraySize::Named(_),
                     ..
                 })
                 | TyKind::Struct(_)
@@ -319,11 +440,32 @@ pub enum ScalarType {
     I32,
     U32,
     F32,
+    /// The type of an unsuffixed integer literal, which converts to what its use needs.
+    AbstractInt,
+    /// The type of an unsuffixed float literal, which converts to what its use needs.
+    AbstractFloat,
 }
 
 impl ScalarType {
     pub fn is_numeric(&self) -> bool {
-        matches!(self, ScalarType::F32 | ScalarType::U32 | ScalarType::I32)
+        !matches!(self, ScalarType::Bool)
+    }
+
+    /// WGSL's rank for converting to `to`, lower preferred, or `None` when it cannot.
+    fn conversion_rank(
+        &self,
+        to: &ScalarType,
+    ) -> Option<u32> {
+        use ScalarType::*;
+        match (self, to) {
+            _ if self == to => Some(0),
+            (AbstractFloat, F32) => Some(1),
+            (AbstractInt, I32) => Some(3),
+            (AbstractInt, U32) => Some(4),
+            (AbstractInt, AbstractFloat) => Some(5),
+            (AbstractInt, F32) => Some(6),
+            _ => None,
+        }
     }
 }
 
@@ -414,7 +556,24 @@ pub struct ArrayType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArraySize {
     Const(u64),
+    /// A length given by a constant, which we do not evaluate.
+    Named(Name),
     Dynamic,
+}
+
+impl ArraySize {
+    /// Whether arrays of these sizes can be the same type, as a named size could be any length.
+    fn matches(
+        &self,
+        other: &ArraySize,
+    ) -> bool {
+        match (self, other) {
+            (ArraySize::Dynamic, ArraySize::Dynamic) => true,
+            (ArraySize::Dynamic, _) | (_, ArraySize::Dynamic) => false,
+            (ArraySize::Named(_), _) | (_, ArraySize::Named(_)) => true,
+            (ArraySize::Const(a), ArraySize::Const(b)) => a == b,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

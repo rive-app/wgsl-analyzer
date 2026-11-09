@@ -140,7 +140,7 @@ firstTrailingBit(vecN<u32>) -> vecN<u32>
 extractBits(i32, u32, u32) -> i32
 extractBits(vecN<i32>, u32, u32) -> vecN<i32>
 extractBits(u32, u32, u32) -> u32
-extractBits(vecN<u32>, u32, u32) -> vecN<i32>
+extractBits(vecN<u32>, u32, u32) -> vecN<u32>
 insertBits(i32, i32, u32, u32) -> i32
 insertBits(vecN<i32>, vecN<i32>, u32, u32) -> vecN<i32>
 insertBits(u32, u32, u32, u32) -> u32
@@ -278,25 +278,25 @@ textureGatherCompare(texture_depth_cube_array, sampler_comparison, vec3<f32>, i3
 textureGatherCompare(texture_depth_cube_array, sampler_comparison, vec3<f32>, u32, f32) -> vec4<f32>
 
 
-textureNumLayers(texture_2d_array<T>) -> i32
-textureNumLayers(texture_cube_array<T>) -> i32
-textureNumLayers(texture_depth_2d_array) -> i32
-textureNumLayers(texture_depth_cube_array) -> i32
-textureNumLayers(texture_storage_2d_array<_;_>) -> i32
+textureNumLayers(texture_2d_array<T>) -> u32
+textureNumLayers(texture_cube_array<T>) -> u32
+textureNumLayers(texture_depth_2d_array) -> u32
+textureNumLayers(texture_depth_cube_array) -> u32
+textureNumLayers(texture_storage_2d_array<_;_>) -> u32
 
-textureNumLevels(texture_1d<T>) -> i32
-textureNumLevels(texture_2d<T>) -> i32
-textureNumLevels(texture_2d_array<T>) -> i32
-textureNumLevels(texture_3d<T>) -> i32
-textureNumLevels(texture_cube<T>) -> i32
-textureNumLevels(texture_cube_array<T>) -> i32
-textureNumLevels(texture_depth_2d) -> i32
-textureNumLevels(texture_depth_2d_array) -> i32
-textureNumLevels(texture_depth_cube) -> i32
-textureNumLevels(texture_depth_cube_array) -> i32
+textureNumLevels(texture_1d<T>) -> u32
+textureNumLevels(texture_2d<T>) -> u32
+textureNumLevels(texture_2d_array<T>) -> u32
+textureNumLevels(texture_3d<T>) -> u32
+textureNumLevels(texture_cube<T>) -> u32
+textureNumLevels(texture_cube_array<T>) -> u32
+textureNumLevels(texture_depth_2d) -> u32
+textureNumLevels(texture_depth_2d_array) -> u32
+textureNumLevels(texture_depth_cube) -> u32
+textureNumLevels(texture_depth_cube_array) -> u32
 
-textureNumSamples(texture_multisampled_2d<T>) -> i32
-textureNumSamples(texture_depth_multisampled_2d) -> i32
+textureNumSamples(texture_multisampled_2d<T>) -> u32
+textureNumSamples(texture_depth_multisampled_2d) -> u32
 
 textureSample(texture_1d<f32>, sampler, f32) -> vec4<f32>
 textureSample(texture_2d<f32>, sampler, vec2<f32>) -> vec4<f32>
@@ -452,7 +452,7 @@ op_binary_bitop(i32, i32) -> i32
 
 op_binary_shift(vecN<u32>, vecN<u32>) -> vecN<u32>
 op_binary_shift(u32, u32) -> u32
-op_binary_shift(vecN<i32>, vecN<u32>) -> vecN<u32>
+op_binary_shift(vecN<i32>, vecN<u32>) -> vecN<i32>
 op_binary_shift(i32, u32) -> i32
 
 
@@ -566,6 +566,7 @@ op_array_constructor(T, T, T, T, T) -> array<T>
 op_convert(u32) -> bool
 op_convert(i32) -> bool
 op_convert(f32) -> bool
+op_convert(bool) -> bool
 op_convert(vecN<u32>) -> vecN<bool>
 op_convert(vecN<i32>) -> vecN<bool>
 op_convert(vecN<f32>) -> vecN<bool>
@@ -573,6 +574,7 @@ op_convert(vecN<f32>) -> vecN<bool>
 op_convert(bool) -> i32
 op_convert(u32) -> i32
 op_convert(f32) -> i32
+op_convert(i32) -> i32
 op_convert(vecN<bool>) -> vecN<i32>
 op_convert(vecN<u32>) -> vecN<i32>
 op_convert(vecN<f32>) -> vecN<i32>
@@ -586,6 +588,7 @@ op_convert(vecN<f32>) -> vecN<u32>
 
 op_convert(bool) -> u32
 op_convert(i32) -> u32
+op_convert(u32) -> u32
 op_convert(f32) -> u32
 op_convert(vecN<bool>) -> vecN<u32>
 op_convert(vecN<i32>) -> vecN<u32>
