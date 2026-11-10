@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{fmt::Write, sync::Arc};
 
 use super::{BuiltinStructKind, Ty, TyKind};
 use crate::{
@@ -97,7 +97,29 @@ pub fn pretty_fn_with_verbosity(
     verbosity: TypeVerbosity,
 ) -> String {
     let mut str = String::new();
-    pretty_fn_inner(db, function, &mut str, verbosity).unwrap();
+    pretty_fn_inner(db, function, &mut str, verbosity, &|_| false).unwrap();
+    str
+}
+
+/// One signature for a builtin table line's overloads, with `i32|u32` where they take either.
+pub fn pretty_fn_variants(
+    db: &dyn HirDatabase,
+    variants: &[Arc<FunctionDetails>],
+) -> String {
+    let differs = |i: usize| {
+        variants
+            .iter()
+            .any(|variant| variant.parameters[i].0 != variants[0].parameters[i].0)
+    };
+    let mut str = String::new();
+    pretty_fn_inner(
+        db,
+        &variants[0],
+        &mut str,
+        TypeVerbosity::default(),
+        &differs,
+    )
+    .unwrap();
     str
 }
 
@@ -106,13 +128,20 @@ fn pretty_fn_inner(
     function: &FunctionDetails,
     f: &mut String,
     verbosity: TypeVerbosity,
+    either_integer: &dyn Fn(usize) -> bool,
 ) -> std::fmt::Result {
     write!(f, "fn(")?;
     for (i, param) in function.parameters().enumerate() {
         if i != 0 {
             f.push_str(", ");
         }
-        write_ty(db, param, f, verbosity)?;
+        if either_integer(i) {
+            let mut ty = String::new();
+            write_ty(db, param, &mut ty, verbosity)?;
+            f.push_str(&ty.replace("i32", "i32|u32"));
+        } else {
+            write_ty(db, param, f, verbosity)?;
+        }
     }
     write!(f, ")")?;
     if let Some(ret) = function.return_type {

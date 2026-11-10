@@ -14,6 +14,7 @@ enum Generic {
 
 #[derive(Debug)]
 struct Overload {
+    line: usize,
     generics: BTreeMap<char, (usize, Generic)>,
     return_type: Option<Type>,
     parameters: Vec<(Type, Option<String>)>,
@@ -122,12 +123,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builtins: BTreeMap<String, Builtin> = BTreeMap::new();
 
     let builtins_file = std::fs::read_to_string("builtins.wgsl")?;
-    for line in builtins_file.lines() {
+    for (index, line) in builtins_file.lines().enumerate() {
         if line.is_empty() || line.starts_with("//") {
             continue;
         }
         for line in integer_variants(line) {
-            let (name, overload) = parse_line(&line);
+            let (name, overload) = parse_line(index, &line);
             let builtin = builtins.entry(name.to_string()).or_default();
             builtin.overloads.push(overload);
         }
@@ -200,11 +201,15 @@ fn integer_variants(line: &str) -> Vec<String> {
     };
     integer_variants(after)
         .into_iter()
+        // i32 first, since overload errors print the first variant and mark its i32s.
         .flat_map(|rest| ["i32", "u32"].map(|ty| format!("{before}{ty}{rest}")))
         .collect()
 }
 
-fn parse_line(line: &str) -> (&str, Overload) {
+fn parse_line(
+    index: usize,
+    line: &str,
+) -> (&str, Overload) {
     let (name, line) = line.split_once('(').unwrap();
     let (parameters, line) = line.split_once(')').unwrap();
     let return_type = line.trim_start_matches(" ->").trim();
@@ -233,6 +238,7 @@ fn parse_line(line: &str) -> (&str, Overload) {
     (
         name,
         Overload {
+            line: index,
             generics,
             return_type,
             parameters,
@@ -503,10 +509,12 @@ fn builtin_to_rust(
             f,
             "
             BuiltinOverload {{
+                line: {line},
                 generics: vec![{generics}],
                 ty: FunctionDetails {{
                     return_type: {return_ty},
                     parameters: vec![",
+            line = overload.line,
             return_ty = overload
                 .return_type
                 .as_ref()

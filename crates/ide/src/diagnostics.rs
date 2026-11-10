@@ -547,10 +547,7 @@ pub fn diagnostics(
                         .map(|ty| ty::pretty::pretty_type(db, *ty))
                         .join(", ");
 
-                    let possible = builtin
-                        .overloads()
-                        .map(|(_, overload)| pretty_fn(db, &overload.ty.lookup(db)))
-                        .join("\n");
+                    let possible = builtin.signatures(db).join("\n");
 
                     let name = match name {
                         Some(name) => name,
@@ -561,7 +558,7 @@ pub fn diagnostics(
                     Diagnostic::new(
                         DiagnosticCode("8"),
                         format!(
-                            "no overload of `{}` found for given arguments.\
+                            "no overload of `{}` found for given arguments. \
                         Found ({}), expected one of:\n{}",
                             name, parameters, possible
                         ),
@@ -693,7 +690,7 @@ pub fn diagnostics(
                     Diagnostic::new(
                         DiagnosticCode("18"),
                         format!(
-                            "no overload of constructor `{}` found for given\
+                            "no overload of constructor `{}` found for given \
                             arguments. Found ({parameters}), expected one of:\n{possible}",
                             pretty_type(db, ty),
                         ),

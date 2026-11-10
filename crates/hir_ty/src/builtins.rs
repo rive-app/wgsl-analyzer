@@ -3,7 +3,7 @@ use hir_def::module_data::Name;
 use crate::{
     HirDatabase,
     function::{FunctionDetails, ResolvedFunctionId},
-    ty::*,
+    ty::{pretty::pretty_fn_variants, *},
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -76,10 +76,29 @@ impl Builtin {
     ) -> &BuiltinOverload {
         &self.overloads[overload_id.0]
     }
+
+    /// Each table line of this builtin, printed once for all the integer variants it expands to.
+    pub fn signatures(
+        &self,
+        db: &dyn HirDatabase,
+    ) -> Vec<String> {
+        self.overloads
+            .chunk_by(|a, b| a.line == b.line)
+            .map(|variants| {
+                let variants: Vec<_> = variants
+                    .iter()
+                    .map(|overload| overload.ty.lookup(db))
+                    .collect();
+                pretty_fn_variants(db, &variants)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct BuiltinOverload {
+    /// The table line this overload was expanded from.
+    pub line: usize,
     pub generics: Vec<GenericArgKind>,
     pub ty: ResolvedFunctionId,
 }
