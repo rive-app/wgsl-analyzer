@@ -304,7 +304,7 @@ impl TryFrom<ast::TextureType> for TextureType {
             ast::TextureType::TextureCubeArray(_) => (TextureKindVariant::Sampled, TextureDimension::Cube, true, false),
 
             ast::TextureType::TextureMultisampled2d(_) => (TextureKindVariant::Sampled, TextureDimension::D2, false, true),
-            ast::TextureType::TextureExternal(_) => (TextureKindVariant::External, TextureDimension::D1, false, false),
+            ast::TextureType::TextureExternal(_) => (TextureKindVariant::External, TextureDimension::D2, false, false),
 
             ast::TextureType::TextureStorage1d(_) => (TextureKindVariant::Storage, TextureDimension::D1, false, false),
             ast::TextureType::TextureStorage2d(_) => (TextureKindVariant::Storage, TextureDimension::D2, false, false),

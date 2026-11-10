@@ -126,9 +126,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if line.is_empty() || line.starts_with("//") {
             continue;
         }
-        let (name, overload) = parse_line(line);
-        let builtin = builtins.entry(name.to_string()).or_default();
-        builtin.overloads.push(overload);
+        for line in integer_variants(line) {
+            let (name, overload) = parse_line(&line);
+            let builtin = builtins.entry(name.to_string()).or_default();
+            builtin.overloads.push(overload);
+        }
     }
 
     // panic!("{:#?}", builtins);
@@ -189,6 +191,17 @@ impl Builtin {{
     write!(f, "    ];\n}}")?;
 
     Ok(())
+}
+
+/// `line` once for each way of reading its `iu32`s, each of which WGSL lets be i32 or u32.
+fn integer_variants(line: &str) -> Vec<String> {
+    let Some((before, after)) = line.split_once("iu32") else {
+        return vec![line.to_string()];
+    };
+    integer_variants(after)
+        .into_iter()
+        .flat_map(|rest| ["i32", "u32"].map(|ty| format!("{before}{ty}{rest}")))
+        .collect()
 }
 
 fn parse_line(line: &str) -> (&str, Overload) {
