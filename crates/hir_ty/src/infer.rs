@@ -53,6 +53,18 @@ pub fn infer_query(
     Arc::new(ctx.resolve_all())
 }
 
+/// What a declaration whose initializer depends on itself, which WGSL forbids, infers to.
+pub fn infer_cycle(
+    db: &dyn HirDatabase,
+    _cycle: &[String],
+    _def: &DefWithBodyId,
+) -> Arc<InferenceResult> {
+    Arc::new(InferenceResult {
+        return_type: Some(TyKind::Error.intern(db)),
+        ..InferenceResult::default()
+    })
+}
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum InferenceDiagnostic {
     AssignmentNotAReference {

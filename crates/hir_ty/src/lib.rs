@@ -13,7 +13,8 @@ use hir_def::{
 };
 use infer::{InferenceResult, TyLoweringContext};
 use la_arena::ArenaMap;
-use ty::{Ty, TyKind};
+use rustc_hash::FxHashSet;
+use ty::{ArrayType, AtomicType, Ptr, Ref, Ty, TyKind};
 
 pub mod builtins;
 pub mod function;
@@ -25,10 +26,17 @@ pub mod validate;
 #[salsa::query_group(HirDatabaseStorage)]
 pub trait HirDatabase: DefDatabase + Upcast<dyn DefDatabase> {
     #[salsa::invoke(infer::infer_query)]
+    #[salsa::cycle(infer::infer_cycle)]
     fn infer(
         &self,
         def: DefWithBodyId,
     ) -> Arc<InferenceResult>;
+
+    /// Whether the struct contains itself, which WGSL forbids and walks over fields must stop at.
+    fn struct_is_recursive(
+        &self,
+        r#struct: StructId,
+    ) -> bool;
 
     fn field_types(
         &self,
@@ -85,6 +93,40 @@ fn field_types(
     }
 
     Arc::new(map)
+}
+
+fn struct_is_recursive(
+    db: &dyn HirDatabase,
+    r#struct: StructId,
+) -> bool {
+    let mut seen = FxHashSet::default();
+    db.field_types(r#struct)
+        .values()
+        .any(|&ty| reaches_struct(db, ty, r#struct, &mut seen))
+}
+
+/// Whether `ty` holds `target`, looking into each other struct once.
+fn reaches_struct(
+    db: &dyn HirDatabase,
+    ty: Ty,
+    target: StructId,
+    seen: &mut FxHashSet<StructId>,
+) -> bool {
+    match ty.kind(db) {
+        TyKind::Struct(id) => {
+            id == target
+                || (seen.insert(id)
+                    && db
+                        .field_types(id)
+                        .values()
+                        .any(|&ty| reaches_struct(db, ty, target, seen)))
+        },
+        TyKind::Array(ArrayType { inner, .. })
+        | TyKind::Atomic(AtomicType { inner })
+        | TyKind::Ref(Ref { inner, .. })
+        | TyKind::Ptr(Ptr { inner, .. }) => reaches_struct(db, inner, target, seen),
+        _ => false,
+    }
 }
 
 fn function_type(

@@ -43,7 +43,7 @@ impl HirFileId {
 
                 match &import.value {
                     ImportValue::Path(path) => relative_file(db, import_loc.file_id, path),
-                    _ => unimplemented!(),
+                    ImportValue::Custom(_) => None,
                 }
             },
         }

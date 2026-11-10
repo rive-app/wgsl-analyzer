@@ -386,10 +386,14 @@ impl TyKind {
             TyKind::Vector(vec) => vec.inner.kind(db).is_numeric_scalar(),
             TyKind::Matrix(_) | TyKind::Atomic(_) => true,
             TyKind::Array(array) => array.inner.kind(db).is_host_shareable(db),
-            TyKind::Struct(r#struct) => db
-                .field_types(*r#struct)
-                .iter()
-                .all(|(_, ty)| ty.kind(db).is_host_shareable(db)),
+            // A struct that contains itself is wrong for that reason, not this one.
+            TyKind::Struct(r#struct) => {
+                db.struct_is_recursive(*r#struct)
+                    || db
+                        .field_types(*r#struct)
+                        .iter()
+                        .all(|(_, ty)| ty.kind(db).is_host_shareable(db))
+            },
             _ => false,
         }
     }
@@ -403,10 +407,13 @@ impl TyKind {
                 size: ArraySize::Dynamic,
                 ..
             }) => true,
-            TyKind::Struct(r#struct) => db
-                .field_types(*r#struct)
-                .iter()
-                .any(|(_, ty)| ty.kind(db).contains_runtime_sized_array(db)),
+            TyKind::Struct(r#struct) => {
+                !db.struct_is_recursive(*r#struct)
+                    && db
+                        .field_types(*r#struct)
+                        .iter()
+                        .any(|(_, ty)| ty.kind(db).contains_runtime_sized_array(db))
+            },
             _ => false,
         }
     }
@@ -422,9 +429,11 @@ impl TyKind {
                 if *id == r#struct {
                     return true;
                 }
-                db.field_types(*id)
-                    .values()
-                    .any(|ty| ty.contains_struct(db, r#struct))
+                !db.struct_is_recursive(*id)
+                    && db
+                        .field_types(*id)
+                        .values()
+                        .any(|ty| ty.contains_struct(db, r#struct))
             },
             TyKind::Array(array) => array.inner.contains_struct(db, r#struct),
             TyKind::Ref(r) => r.inner.contains_struct(db, r#struct),

@@ -89,6 +89,7 @@ impl TyKind {
                 VecSize::Four => 16,
                 VecSize::BoundVar(_) => return None,
             },
+            TyKind::Struct(r#struct) if db.struct_is_recursive(*r#struct) => return None,
             TyKind::Struct(r#struct) => {
                 let fields = db.field_types(*r#struct);
                 let (align, _) =
@@ -138,6 +139,7 @@ impl TyKind {
 
                 round_up(vec_align, vec_size) * n
             },
+            TyKind::Struct(r#struct) if db.struct_is_recursive(*r#struct) => return None,
             TyKind::Struct(r#struct) => {
                 let fields = db.field_types(*r#struct);
                 let (_, size) =
