@@ -81,7 +81,7 @@ fn main() -> Result<()> {
 fn setup_logging(trace: &TraceConfig) {
     let level = if trace.extension { "debug" } else { "info" };
     let filter = format!(
-        "{default},salsa=warn,naga=warn,lsp_server={lsp_server}",
+        "{default},salsa=warn,lsp_server={lsp_server}",
         default = level,
         lsp_server = if trace.server { "debug" } else { "info" }
     );

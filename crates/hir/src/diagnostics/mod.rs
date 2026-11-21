@@ -1,7 +1,7 @@
 pub mod global_variable;
 pub mod precedence;
 
-use base_db::{FileRange, TextRange};
+use base_db::TextRange;
 use hir_def::{HirFileId, InFile, body::BodySourceMap, expr::BinaryOp, module_data::Name};
 use hir_ty::{
     HirDatabase,
@@ -20,17 +20,6 @@ use crate::{Function, GlobalConstant, GlobalVariable, HasSource, Override, TypeA
 
 pub struct DiagnosticsConfig {
     pub type_errors: bool,
-    pub naga_parsing_errors: bool,
-    pub naga_validation_errors: bool,
-    pub naga_version: NagaVersion,
-}
-
-#[derive(Debug)]
-pub enum NagaVersion {
-    Naga14,
-    Naga19,
-    Naga22,
-    NagaMain,
 }
 
 pub enum AnyDiagnostic {
@@ -114,12 +103,6 @@ pub enum AnyDiagnostic {
         op: BinaryOp,
         sequence_permitted: bool,
     },
-    NagaValidationError {
-        file_id: HirFileId,
-        range: TextRange,
-        message: String,
-        related: Vec<(String, FileRange)>,
-    },
     NoConstructor {
         expr: InFile<AstPtr<ast::Expr>>,
         builtins: [BuiltinId; 2],
@@ -145,7 +128,6 @@ impl AnyDiagnostic {
             AnyDiagnostic::InvalidStorageClass { var, .. } => var.file_id,
             AnyDiagnostic::InvalidType { file_id, .. } => *file_id,
             AnyDiagnostic::UnresolvedImport { import, .. } => import.file_id,
-            AnyDiagnostic::NagaValidationError { file_id, .. } => *file_id,
             AnyDiagnostic::ParseError { file_id, .. } => *file_id,
             AnyDiagnostic::UnconfiguredCode { file_id, .. } => *file_id,
             AnyDiagnostic::NoConstructor { expr, .. } => expr.file_id,

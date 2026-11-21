@@ -139,27 +139,6 @@
 					"default": true,
 					"description": "Controls whether to show type errors."
 				},
-				"wgsl-analyzer.diagnostics.nagaParsingErrors": {
-					"type": "boolean",
-					"default": false,
-					"description": "Controls whether to show naga's parsing errors."
-				},
-				"wgsl-analyzer.diagnostics.nagaValidationErrors": {
-					"type": "boolean",
-					"default": true,
-					"description": "Controls whether to show naga's validation errors."
-				},
-				"wgsl-analyzer.diagnostics.nagaVersion": {
-					"type": "string",
-					"enum": [
-						"0.14",
-						"0.19",
-						"0.22",
-						"main"
-					],
-					"default": "0.22",
-					"description": "Which version of naga to use for its diagnostics"
-				},
 				"wgsl-analyzer.customImports": {
 					"type": "object",
 					"additionalProperties": {

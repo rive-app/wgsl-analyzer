@@ -210,15 +210,11 @@ wgsl-analyzer supports `#ifdef`, `#ifndef`, `#else`, `#endif` directives in the 
 
 ### Diagnostics
 
-wgsl-analyzer will support diagnostics for parsing errors, and optionally (by default yes) type errors and naga-reported validation errors.
-You can also additionally enable diagnostics for naga parsing errors.
+wgsl-analyzer will support diagnostics for parsing errors, and optionally (by default yes) type errors.
 
 ```json
 {
-    "wgsl-analyzer.diagnostics.typeErrors": true,
-    "wgsl-analyzer.diagnostics.nagaParsing": false,
-    "wgsl-analyzer.diagnostics.nagaValidation": true,
-    "wgsl-analyzer.diagnostics.nagaVersion": "0.22" // one of the supported versions or 'main'
+    "wgsl-analyzer.diagnostics.typeErrors": true
 }
 ```
 

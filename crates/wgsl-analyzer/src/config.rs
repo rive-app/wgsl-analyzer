@@ -64,28 +64,6 @@ impl Config {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsConfig {
     pub type_errors: bool,
-    pub naga_parsing_errors: bool,
-    pub naga_validation_errors: bool,
-    pub naga_version: NagaVersion,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub enum NagaVersion {
-    #[serde(rename = "0.14")]
-    Naga14,
-    #[serde(rename = "0.19")]
-    Naga19,
-    #[serde(rename = "0.22")]
-    Naga22,
-    #[serde(rename = "main")]
-    NagaMain,
-}
-
-impl Default for NagaVersion {
-    #[inline]
-    fn default() -> Self {
-        Self::Naga14
-    }
 }
 
 impl ConfigData {
@@ -116,14 +94,6 @@ impl ConfigData {
     pub const fn diagnostics(&self) -> diagnostics::DiagnosticsConfig {
         diagnostics::DiagnosticsConfig {
             type_errors: self.diagnostics.type_errors,
-            naga_parsing_errors: self.diagnostics.naga_parsing_errors,
-            naga_validation_errors: self.diagnostics.naga_validation_errors,
-            naga_version: match self.diagnostics.naga_version {
-                NagaVersion::Naga14 => diagnostics::NagaVersion::Naga14,
-                NagaVersion::Naga19 => diagnostics::NagaVersion::Naga19,
-                NagaVersion::Naga22 => diagnostics::NagaVersion::Naga22,
-                NagaVersion::NagaMain => diagnostics::NagaVersion::NagaMain,
-            },
         }
     }
 
